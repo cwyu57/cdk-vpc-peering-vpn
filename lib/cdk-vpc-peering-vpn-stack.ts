@@ -1,9 +1,101 @@
+import * as fs from 'fs';
 import * as cdk from '@aws-cdk/core';
+import * as cr from '@aws-cdk/custom-resources';
+import * as ec2 from '@aws-cdk/aws-ec2';
+import * as iam from '@aws-cdk/aws-iam';
+import * as logs from '@aws-cdk/aws-logs';
 
 export class CdkVpcPeeringVpnStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     // The code that defines your stack goes here
+    const vpnVpcCidr = '10.255.0.0/16';
+    const vpnVpcDnsIp = '10.255.0.2';
+    const clientVpnCidr = '10.255.252.0/22';
+
+    const vpnVpcPublicSubnetGroupName = 'pubic';
+    const vpnVpcIsolatedSubnetGroupName = 'client-vpn-isolated';
+
+    const vpnVpc = new ec2.Vpc(this, 'VpnVpc', {
+      cidr: vpnVpcCidr,
+      maxAzs: 3,
+      subnetConfiguration: [
+        {
+          cidrMask: 24,
+          name: vpnVpcPublicSubnetGroupName,
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+        {
+          cidrMask: 24,
+          name: vpnVpcIsolatedSubnetGroupName,
+          subnetType: ec2.SubnetType.ISOLATED,
+        },
+      ],
+    });
+
+    const clientVpnAcm = new cr.AwsCustomResource(this, 'ClientVpnAcmCustomResource', {
+      functionName: 'client-vpn-acm-custom-resource-handler',
+      logRetention: logs.RetentionDays.ONE_DAY,
+      onCreate: {
+        service: 'ACM',
+        action: 'importCertificate',
+        parameters: {
+          Certificate: fs.readFileSync('./certificates/server.crt').toString(),
+          PrivateKey: fs.readFileSync('./certificates/server.key').toString(),
+          CertificateChain: fs.readFileSync('./certificates/ca.crt').toString(),
+        },
+        physicalResourceId: cr.PhysicalResourceId.fromResponse('CertificateArn'),
+      },
+      onDelete: {
+        service: 'ACM',
+        action: 'deleteCertificate',
+        parameters: {
+          CertificateArn: new cr.PhysicalResourceIdReference(),
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: [ "acm:DeleteCertificate", "acm:ImportCertificate"],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
+    const acmArn = clientVpnAcm.getResponseField('CertificateArn');
+
+    const clientVpnEndpoint = new ec2.CfnClientVpnEndpoint(this, 'ClientVpnEndpoint', {
+      authenticationOptions: [
+        {
+          type: 'certificate-authentication',
+          mutualAuthentication: {
+            clientRootCertificateChainArn: acmArn,
+          },
+        },
+      ],
+      clientCidrBlock: clientVpnCidr, // 使用者使用 VPN 連線後的 CIDR Block
+      connectionLogOptions: {
+        enabled: false,
+      },
+      serverCertificateArn: acmArn,
+      vpcId: vpnVpc.vpcId,
+      splitTunnel: true,
+      dnsServers: [
+        vpnVpcDnsIp,
+      ],
+    });
+
+    vpnVpc.isolatedSubnets.forEach((subnet, idx) => {
+      new ec2.CfnClientVpnTargetNetworkAssociation(this, `ClientVpnTargetNetworkAssociation${idx + 1}`, {
+        clientVpnEndpointId: clientVpnEndpoint.ref,
+        subnetId: subnet.subnetId,
+      });
+    });
+
+    const authorizationRuleVpnVpc = new ec2.CfnClientVpnAuthorizationRule(this, 'ClientVpnAuthorizationRuleVpnVpc', {
+      clientVpnEndpointId: clientVpnEndpoint.ref,
+      targetNetworkCidr: vpnVpcCidr,
+      authorizeAllGroups: true,
+    });
   }
 }

@@ -21,7 +21,15 @@
     "typescript": "~3.9.7"
   },
   "dependencies": {
+    "@aws-cdk/aws-ec2": "^1.86.0",
+    "@aws-cdk/aws-elasticloadbalancingv2": "^1.86.0",
+    "@aws-cdk/aws-elasticloadbalancingv2-targets": "^1.86.0",
+    "@aws-cdk/aws-iam": "^1.86.0",
+    "@aws-cdk/aws-logs": "^1.86.0",
+    "@aws-cdk/aws-route53": "^1.86.0",
+    "@aws-cdk/aws-route53-targets": "^1.86.0",
     "@aws-cdk/core": "1.86.0",
+    "@aws-cdk/custom-resources": "^1.86.0",
     "source-map-support": "^0.5.16"
   }
 }
