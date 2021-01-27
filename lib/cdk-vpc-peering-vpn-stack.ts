@@ -271,5 +271,40 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'MainVpcBastionHostPrivateDnsName', {
       value: mainVpcBastionHost.instancePrivateDnsName,
     });
+
+    const privateHostZone = new route53.PrivateHostedZone(this, 'PrivateHostZone', {
+      zoneName: 'internal.example.com',
+      vpc: mainVpc,
+    })
+
+    privateHostZone.addVpc(vpnVpc);
+
+    new route53.CnameRecord(this, 'MainVpcBastionHostPrivateCnameRecord', {
+      domainName: mainVpcBastionHost.instancePrivateDnsName,
+      zone: privateHostZone,
+      recordName: 'main-vpc-bastion-host-private',
+      ttl: cdk.Duration.seconds(20),
+    });
+
+    new route53.CnameRecord(this, 'VpnVpcBastionHostPrivateCnameRecord', {
+      domainName: vpnVpcBastionHost.instancePrivateDnsName,
+      zone: privateHostZone,
+      recordName: 'vpn-vpc-bastion-host-private',
+      ttl: cdk.Duration.seconds(20),
+    });
+
+    new route53.CnameRecord(this, 'MainVpcBastionHostPublicCnameRecord', {
+      domainName: mainVpcBastionHost.instancePublicDnsName,
+      zone: privateHostZone,
+      recordName: 'main-vpc-bastion-host-public',
+      ttl: cdk.Duration.seconds(20),
+    });
+
+    new route53.CnameRecord(this, 'VpnVpcBastionHostPublicCnameRecord', {
+      domainName: vpnVpcBastionHost.instancePublicDnsName,
+      zone: privateHostZone,
+      recordName: 'vpn-vpc-bastion-host-public',
+      ttl: cdk.Duration.seconds(20),
+    });
   }
 }
