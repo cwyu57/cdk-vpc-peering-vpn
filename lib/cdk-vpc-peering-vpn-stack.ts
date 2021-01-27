@@ -97,5 +97,22 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       targetNetworkCidr: vpnVpcCidr,
       authorizeAllGroups: true,
     });
+
+    const vpnVpcBastionHost = new ec2.BastionHostLinux(this, 'VpnVpcBastionHost', {
+      vpc: vpnVpc,
+      subnetSelection: {
+        subnetGroupName: vpnVpcPublicSubnetGroupName,
+      },
+    });
+
+    vpnVpcBastionHost.connections.allowFromAnyIpv4(ec2.Port.tcp(22));  // allow any ip v4 for demo usage, do not use in production environment
+    vpnVpcBastionHost.connections.allowFrom(ec2.Peer.ipv4(vpnVpcCidr), ec2.Port.icmpPing());
+
+    new cdk.CfnOutput(this, 'VpnVpcBastionHostPublicDnsName', {
+      value: vpnVpcBastionHost.instancePublicDnsName,
+    });
+    new cdk.CfnOutput(this, 'VpnVpcBastionHostPrivateDnsName', {
+      value: vpnVpcBastionHost.instancePrivateDnsName,
+    });
   }
 }
