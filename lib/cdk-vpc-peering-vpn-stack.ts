@@ -86,6 +86,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       ],
     });
 
+
     vpnVpc.isolatedSubnets.forEach((subnet, idx) => {
       new ec2.CfnClientVpnTargetNetworkAssociation(this, `ClientVpnTargetNetworkAssociation${idx + 1}`, {
         clientVpnEndpointId: clientVpnEndpoint.ref,
@@ -133,12 +134,18 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       authorizeAllGroups: true,
     });
 
+
     vpnVpc.isolatedSubnets.forEach((isolatedSubnet, idx) => {
-      new ec2.CfnClientVpnRoute(this, `VpnVpcIsolatedSubnetPeeringRoute${idx}`, {
+      const clientVpnRoute = new ec2.CfnClientVpnRoute(this, `VpnVpcIsolatedSubnetPeeringRoute${idx}`, {
         clientVpnEndpointId: clientVpnEndpoint.ref,
         destinationCidrBlock: mainVpcCidr,
         targetVpcSubnetId: isolatedSubnet.subnetId,
       });
+
+      // handle dependency issue
+      this
+        .node.findChild(`VpnVpcIsolatedSubnetPeeringRoute${idx}`)
+        .node.addDependency(this.node.findChild('MainVpc'))
     });
 
     const peeringConnection = new ec2.CfnVPCPeeringConnection(this, 'ClientVpnVpcToChocolabsVpc', {
@@ -149,7 +156,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
     // vpn vpc -> peering connection -> main vpc
     vpnVpc.publicSubnets
       .forEach((publicSubnet, idx) => {
-        return new ec2.CfnRoute(this, `VpnVpcPublicSubnet${idx + 1}RouteToMainVpc`, {
+        const route = new ec2.CfnRoute(this, `VpnVpcPublicSubnet${idx + 1}RouteToMainVpc`, {
           routeTableId: publicSubnet.routeTable.routeTableId,
           destinationCidrBlock: mainVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
@@ -157,7 +164,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       })
     vpnVpc.privateSubnets
       .forEach((privateSubnet, idx) => {
-        return new ec2.CfnRoute(this, `VpnVpcPrivateSubnet${idx + 1}RouteToMainVpc`, {
+        const route = new ec2.CfnRoute(this, `VpnVpcPrivateSubnet${idx + 1}RouteToMainVpc`, {
           routeTableId: privateSubnet.routeTable.routeTableId,
           destinationCidrBlock: mainVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
@@ -165,7 +172,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       })
     vpnVpc.isolatedSubnets
       .forEach((isolatedSubnet, idx) => {
-        return new ec2.CfnRoute(this, `VpnVpcIsolatedSubnet${idx + 1}RouteToMainVpc`, {
+        const route = new ec2.CfnRoute(this, `VpnVpcIsolatedSubnet${idx + 1}RouteToMainVpc`, {
           routeTableId: isolatedSubnet.routeTable.routeTableId,
           destinationCidrBlock: mainVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
@@ -175,7 +182,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
     // main vpc -> peering connection -> vpn vpc
     mainVpc.publicSubnets
       .forEach((publicSubnet, idx) => {
-        return new ec2.CfnRoute(this, `MainVpcPublicSubnet${idx + 1}RouteToVpnVpc`, {
+        const route = new ec2.CfnRoute(this, `MainVpcPublicSubnet${idx + 1}RouteToVpnVpc`, {
           routeTableId: publicSubnet.routeTable.routeTableId,
           destinationCidrBlock: vpnVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
@@ -183,7 +190,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       })
     mainVpc.privateSubnets
       .forEach((privateSubnet, idx) => {
-        return new ec2.CfnRoute(this, `MainVpcPrivateSubnet${idx + 1}RouteToVpnVpc`, {
+        const route = new ec2.CfnRoute(this, `MainVpcPrivateSubnet${idx + 1}RouteToVpnVpc`, {
           routeTableId: privateSubnet.routeTable.routeTableId,
           destinationCidrBlock: vpnVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
@@ -191,7 +198,7 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       })
     mainVpc.isolatedSubnets
       .forEach((isolatedSubnet, idx) => {
-        return new ec2.CfnRoute(this, `MainVpcIsolatedSubnet${idx + 1}RouteToVpnVpc`, {
+        const route = new ec2.CfnRoute(this, `MainVpcIsolatedSubnet${idx + 1}RouteToVpnVpc`, {
           routeTableId: isolatedSubnet.routeTable.routeTableId,
           destinationCidrBlock: vpnVpcCidr,
           vpcPeeringConnectionId: peeringConnection.ref,
