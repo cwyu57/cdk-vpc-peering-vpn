@@ -4,6 +4,7 @@ import * as cr from '@aws-cdk/custom-resources';
 import * as ec2 from '@aws-cdk/aws-ec2';
 import * as iam from '@aws-cdk/aws-iam';
 import * as logs from '@aws-cdk/aws-logs';
+import * as route53 from '@aws-cdk/aws-route53';
 
 export class CdkVpcPeeringVpnStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
@@ -98,6 +99,143 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
       authorizeAllGroups: true,
     });
 
+    const mainVpcCidr = '10.0.0.0/16';
+
+    const mainVpcPublicSubnetGroupName = 'pubic';
+    const mainVpcPrivateSubnetGroupName = 'private';
+    const mainVpcIsolatedSubnetGroupName = 'isolated';
+
+    const mainVpc = new ec2.Vpc(this, 'MainVpc', {
+      cidr: mainVpcCidr,
+      maxAzs: 3,
+      subnetConfiguration: [
+        {
+          cidrMask: 24,
+          name: mainVpcPublicSubnetGroupName,
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+        {
+          cidrMask: 24,
+          name: mainVpcPrivateSubnetGroupName,
+          subnetType: ec2.SubnetType.PRIVATE,
+        },
+        {
+          cidrMask: 28,
+          name: mainVpcIsolatedSubnetGroupName,
+          subnetType: ec2.SubnetType.ISOLATED,
+        }
+      ],
+    });
+
+    const authorizationRuleMainVpc = new ec2.CfnClientVpnAuthorizationRule(this, 'ClientVpnAuthorizationRuleMainVpc', {
+      clientVpnEndpointId: clientVpnEndpoint.ref,
+      targetNetworkCidr: mainVpcCidr,
+      authorizeAllGroups: true,
+    });
+
+    vpnVpc.isolatedSubnets.forEach((isolatedSubnet, idx) => {
+      new ec2.CfnClientVpnRoute(this, `VpnVpcIsolatedSubnetPeeringRoute${idx}`, {
+        clientVpnEndpointId: clientVpnEndpoint.ref,
+        destinationCidrBlock: mainVpcCidr,
+        targetVpcSubnetId: isolatedSubnet.subnetId,
+      });
+    });
+
+    const peeringConnection = new ec2.CfnVPCPeeringConnection(this, 'ClientVpnVpcToChocolabsVpc', {
+      vpcId: vpnVpc.vpcId,
+      peerVpcId: mainVpc.vpcId,
+    });
+
+    // vpn vpc -> peering connection -> main vpc
+    vpnVpc.publicSubnets
+      .forEach((publicSubnet, idx) => {
+        return new ec2.CfnRoute(this, `VpnVpcPublicSubnet${idx + 1}RouteToMainVpc`, {
+          routeTableId: publicSubnet.routeTable.routeTableId,
+          destinationCidrBlock: mainVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      })
+    vpnVpc.privateSubnets
+      .forEach((privateSubnet, idx) => {
+        return new ec2.CfnRoute(this, `VpnVpcPrivateSubnet${idx + 1}RouteToMainVpc`, {
+          routeTableId: privateSubnet.routeTable.routeTableId,
+          destinationCidrBlock: mainVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      })
+    vpnVpc.isolatedSubnets
+      .forEach((isolatedSubnet, idx) => {
+        return new ec2.CfnRoute(this, `VpnVpcIsolatedSubnet${idx + 1}RouteToMainVpc`, {
+          routeTableId: isolatedSubnet.routeTable.routeTableId,
+          destinationCidrBlock: mainVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      })
+
+    // main vpc -> peering connection -> vpn vpc
+    mainVpc.publicSubnets
+      .forEach((publicSubnet, idx) => {
+        return new ec2.CfnRoute(this, `MainVpcPublicSubnet${idx + 1}RouteToVpnVpc`, {
+          routeTableId: publicSubnet.routeTable.routeTableId,
+          destinationCidrBlock: vpnVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      })
+    mainVpc.privateSubnets
+      .forEach((privateSubnet, idx) => {
+        return new ec2.CfnRoute(this, `MainVpcPrivateSubnet${idx + 1}RouteToVpnVpc`, {
+          routeTableId: privateSubnet.routeTable.routeTableId,
+          destinationCidrBlock: vpnVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      })
+    mainVpc.isolatedSubnets
+      .forEach((isolatedSubnet, idx) => {
+        return new ec2.CfnRoute(this, `MainVpcIsolatedSubnet${idx + 1}RouteToVpnVpc`, {
+          routeTableId: isolatedSubnet.routeTable.routeTableId,
+          destinationCidrBlock: vpnVpcCidr,
+          vpcPeeringConnectionId: peeringConnection.ref,
+        });
+      });
+
+    const vpcPeeringDns = new cr.AwsCustomResource(this, 'VpcPeeringDnsCustomResource', {
+      functionName: 'vpc-peering-dns-custom-resource-handler',
+      logRetention: logs.RetentionDays.ONE_DAY,
+      onCreate: {
+        service: 'EC2',
+        action: 'modifyVpcPeeringConnectionOptions',
+        parameters: {
+          VpcPeeringConnectionId: peeringConnection.ref,
+          AccepterPeeringConnectionOptions: {
+            AllowDnsResolutionFromRemoteVpc: true,
+          },
+          RequesterPeeringConnectionOptions: {
+            AllowDnsResolutionFromRemoteVpc: true,
+          },
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('VpcPeeringDnsCustomResource'),
+      },
+      onDelete: {
+        service: 'EC2',
+        action: 'modifyVpcPeeringConnectionOptions',
+        parameters: {
+          VpcPeeringConnectionId: peeringConnection.ref,
+          AccepterPeeringConnectionOptions: {
+            AllowDnsResolutionFromRemoteVpc: false,
+          },
+          RequesterPeeringConnectionOptions: {
+            AllowDnsResolutionFromRemoteVpc: false,
+          },
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['ec2:ModifyVpcPeeringConnectionOptions'],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
     const vpnVpcBastionHost = new ec2.BastionHostLinux(this, 'VpnVpcBastionHost', {
       vpc: vpnVpc,
       subnetSelection: {
@@ -107,12 +245,31 @@ export class CdkVpcPeeringVpnStack extends cdk.Stack {
 
     vpnVpcBastionHost.connections.allowFromAnyIpv4(ec2.Port.tcp(22));  // allow any ip v4 for demo usage, do not use in production environment
     vpnVpcBastionHost.connections.allowFrom(ec2.Peer.ipv4(vpnVpcCidr), ec2.Port.icmpPing());
+    vpnVpcBastionHost.connections.allowFrom(ec2.Peer.ipv4(mainVpcCidr), ec2.Port.icmpPing());
 
     new cdk.CfnOutput(this, 'VpnVpcBastionHostPublicDnsName', {
       value: vpnVpcBastionHost.instancePublicDnsName,
     });
     new cdk.CfnOutput(this, 'VpnVpcBastionHostPrivateDnsName', {
       value: vpnVpcBastionHost.instancePrivateDnsName,
+    });
+
+    const mainVpcBastionHost = new ec2.BastionHostLinux(this, 'MainVpcBastionHost', {
+      vpc: mainVpc,
+      subnetSelection: {
+        subnetGroupName: mainVpcPublicSubnetGroupName,
+      },
+    });
+
+    mainVpcBastionHost.connections.allowFromAnyIpv4(ec2.Port.tcp(22));  // allow any ip v4 for demo usage, do not use in production environment
+    mainVpcBastionHost.connections.allowFrom(ec2.Peer.ipv4(vpnVpcCidr), ec2.Port.icmpPing());
+    mainVpcBastionHost.connections.allowFrom(ec2.Peer.ipv4(mainVpcCidr), ec2.Port.icmpPing());
+
+    new cdk.CfnOutput(this, 'MainVpcBastionHostPublicDnsName', {
+      value: mainVpcBastionHost.instancePublicDnsName,
+    });
+    new cdk.CfnOutput(this, 'MainVpcBastionHostPrivateDnsName', {
+      value: mainVpcBastionHost.instancePrivateDnsName,
     });
   }
 }
